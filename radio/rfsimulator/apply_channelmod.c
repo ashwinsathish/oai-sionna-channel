@@ -5,11 +5,18 @@
 #include <complex.h>
 #include <common/utils/LOG/log.h>
 #include <openair1/SIMULATION/TOOLS/sim.h>
+#include <openair1/SIMULATION/TOOLS/external_cir.h>
 #include "openair2/LAYER2/NR_MAC_gNB/mac_config.h"
 #include "rfsimulator.h"
 
 void update_channel_model(channel_desc_t *channelDesc, int nbSamples, uint64_t TS)
 {
+  // EXTERNAL_CIR: step the Sionna RT snapshot selected by virtual time.
+  if (channelDesc->modelid == EXTERNAL_CIR) {
+    update_external_cir_snapshot(channelDesc, TS);
+    return;
+  }
+
   if ((channelDesc->sat_height > 0)
       && (channelDesc->enable_dynamic_delay
           || channelDesc->enable_dynamic_Doppler)) { // model for transparent satellite on circular orbit

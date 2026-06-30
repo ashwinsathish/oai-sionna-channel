@@ -126,6 +126,8 @@ typedef struct {
   float *Doppler_phase_cur;
   /// flag indicating if channel direction is UL or DL
   bool is_uplink;
+  /// EXTERNAL_CIR model state (external_cir_t *), NULL for other models
+  void *external_cir;
 } channel_desc_t;
 
 typedef struct {
@@ -220,6 +222,7 @@ typedef enum {
   EPA_high,
   SAT_LEO_TRANS,
   SAT_LEO_REGEN,
+  EXTERNAL_CIR,
 } SCM_t;
 #define CHANNELMOD_MAP_INIT \
   {"custom",custom},\
@@ -257,6 +260,7 @@ typedef enum {
   {"EPA_high",EPA_high},\
   {"SAT_LEO_TRANS",SAT_LEO_TRANS},\
   {"SAT_LEO_REGEN",SAT_LEO_REGEN},\
+  {"EXTERNAL_CIR",EXTERNAL_CIR},\
   {NULL, -1}
 
 #define CONFIG_HLP_SNR     "Set average SNR in dB (for --siml1 option)\n"
@@ -286,6 +290,7 @@ typedef enum {
 #define CHANNELMOD_MODEL_FF_PNAME "forgetfact"
 #define CHANNELMOD_MODEL_CO_PNAME "offset"
 #define CHANNELMOD_MODEL_DT_PNAME "ds_tdl"
+#define CHANNELMOD_MODEL_CIRFILE_PNAME "cir_file"
 
 // clang-format off
 #define CHANNELMOD_MODEL_PARAMS_DESC {  \
@@ -296,6 +301,7 @@ typedef enum {
     {CHANNELMOD_MODEL_FF_PNAME,   "channel forget factor ((0 to 1)\n", 0,  .dblptr=NULL,             .defdblval=0,                     TYPE_DOUBLE,    0 }, \
     {CHANNELMOD_MODEL_CO_PNAME,   "channel offset in samps\n",         0,  .iptr=NULL,               .defintval=0,                     TYPE_INT,       0 }, \
     {CHANNELMOD_MODEL_DT_PNAME,   "delay spread for TDL models\n",     0,  .dblptr=NULL,             .defdblval=0,                     TYPE_DOUBLE,    0 }, \
+    {CHANNELMOD_MODEL_CIRFILE_PNAME, "OAICIRv1 file for EXTERNAL_CIR\n", 0, .strptr=NULL,             .defstrval="",                    TYPE_STRING,    0 }, \
 }
 // clang-format on
 

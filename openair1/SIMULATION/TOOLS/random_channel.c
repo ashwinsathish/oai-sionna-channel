@@ -10,6 +10,7 @@
 
 #include "PHY/TOOLS/tools_defs.h"
 #include "sim.h"
+#include "external_cir.h"
 #include "scm_corrmat.h"
 #include "common/config/config_userapi.h"
 #include "common/utils/telnetsrv/telnetsrv.h"
@@ -1759,6 +1760,14 @@ int random_channel(channel_desc_t *desc, uint8_t abstraction_flag) {
 
   // For AWGN and SAT_LEO_* channels, the received signal (Srx) is equal to transmitted signal (Stx) plus noise (N), i.e., Srx = Stx + N,
   //  therefore, the channel matrix is the identity matrix.
+  // EXTERNAL_CIR: ch[] is loaded from file and stepped by the simulator's
+  // virtual time (update_external_cir_snapshot), never regenerated here.
+  if (desc->modelid == EXTERNAL_CIR) {
+    stop_meas(&desc->random_channel);
+    desc->first_run = 0;
+    return 0;
+  }
+
   if (desc->modelid == AWGN || desc->modelid == SAT_LEO_TRANS || desc->modelid == SAT_LEO_REGEN) {
     for (aarx=0; aarx<desc->nb_rx; aarx++) {
       for (aatx = 0; aatx < desc->nb_tx; aatx++) {
@@ -2278,6 +2287,57 @@ void init_channelmod(void) {
 } /* init_channelmod */
 
 
+/* Constructor for the EXTERNAL_CIR model: allocate + register a descriptor,
+ * load the OAICIRv1 file, size it, and apply snapshot 0. Mirrors the
+ * registration done by new_channel_desc_scm. */
+channel_desc_t *new_channel_desc_external_cir(uint8_t nb_tx,
+                                              uint8_t nb_rx,
+                                              double sampling_rate,
+                                              uint64_t center_freq,
+                                              double channel_bandwidth,
+                                              const char *cir_file)
+{
+  external_cir_t *ec = external_cir_load(cir_file);
+  if (!ec)
+    return NULL;
+
+  if (ec->nb_tx != nb_tx || ec->nb_rx != nb_rx)
+    LOG_W(OCM, "[EXTERNAL_CIR] file is %dx%d but RU is %dx%d; using file dims\n",
+          ec->nb_tx, ec->nb_rx, nb_tx, nb_rx);
+  if (fabs(ec->sampling_rate_hz - sampling_rate) > 1.0)
+    LOG_W(OCM, "[EXTERNAL_CIR] file fs %.3f Msps != RU fs %.3f Msps; regenerate "
+               "the .cir with --fs %.0f for correct timing\n",
+          ec->sampling_rate_hz / 1e6, sampling_rate / 1e6, sampling_rate);
+
+  channel_desc_t *desc = (channel_desc_t *)calloc(1, sizeof(channel_desc_t));
+  for (unsigned int i = 0; i < max_chan; i++) {
+    if (defined_channels[i] == NULL) {
+      defined_channels[i] = desc;
+      desc->chan_idx = i;
+      break;
+    }
+    AssertFatal(i < (max_chan - 1),
+                "No more channel descriptors; increase channelmod.max_chan\n");
+  }
+
+  desc->modelid = EXTERNAL_CIR;
+  desc->center_freq = center_freq;
+  desc->external_cir = ec;
+  desc->normalization_ch_factor = 1.0;
+
+  // nb_taps == channel_length: taps are already sample-spaced and dense.
+  fill_channel_desc(desc, ec->nb_tx, ec->nb_rx,
+                    (uint8_t)ec->channel_length, (uint8_t)ec->channel_length,
+                    NULL, NULL, NULL,
+                    (double)ec->channel_length / sampling_rate * 1e6, /* Td [us] */
+                    sampling_rate, channel_bandwidth,
+                    0.0, 0.0, 0.0, 0.0, 0, 0.0, 0);
+
+  external_cir_apply_snapshot(desc, 0);
+  LOG_I(OCM, "[EXTERNAL_CIR] channel ready from '%s', snapshot 0 applied\n", cir_file);
+  return desc;
+}
+
 int load_channellist(uint8_t nb_tx, uint8_t nb_rx, double sampling_rate, uint64_t center_freq, double channel_bandwidth) {
   paramdef_t achannel_params[] = CHANNELMOD_MODEL_PARAMS_DESC;
   paramlist_def_t channel_list;
@@ -2293,9 +2353,26 @@ int load_channellist(uint8_t nb_tx, uint8_t nb_rx, double sampling_rate, uint64_
   int pindex_PL = config_paramidx_fromname(achannel_params,numparams, CHANNELMOD_MODEL_PL_PNAME );
   int pindex_NP = config_paramidx_fromname(achannel_params,numparams, CHANNELMOD_MODEL_NP_PNAME );
   int pindex_TYPE = config_paramidx_fromname(achannel_params,numparams, CHANNELMOD_MODEL_TYPE_PNAME);
+  int pindex_CIRFILE = config_paramidx_fromname(achannel_params,numparams, CHANNELMOD_MODEL_CIRFILE_PNAME);
 
   for (int i=0; i<channel_list.numelt; i++) {
     int modid = modelid_fromstrtype( *(channel_list.paramarray[i][pindex_TYPE].strptr) );
+
+    if (modid == EXTERNAL_CIR) {
+      const char *cir_file = *(channel_list.paramarray[i][pindex_CIRFILE].strptr);
+      AssertFatal(cir_file && cir_file[0],
+                  "EXTERNAL_CIR model '%s' needs a 'cir_file' parameter\n",
+                  *(channel_list.paramarray[i][pindex_NAME].strptr));
+      channel_desc_t *cir_desc = new_channel_desc_external_cir(
+          nb_tx, nb_rx, sampling_rate, center_freq, channel_bandwidth, cir_file);
+      AssertFatal(cir_desc != NULL, "Could not load EXTERNAL_CIR file '%s'\n", cir_file);
+      // Noise comes from the conf (like other models); path loss + taps from file.
+      cir_desc->noise_power_dB = *(channel_list.paramarray[i][pindex_NP].dblptr);
+      cir_desc->model_name = strdup(*(channel_list.paramarray[i][pindex_NAME].strptr));
+      LOG_I(OCM, "Model %s type EXTERNAL_CIR allocated from config file, list %s\n",
+            *(channel_list.paramarray[i][pindex_NAME].strptr), modellist_name);
+      continue;
+    }
 
     if (modid <0) {
       LOG_E(OCM,"Valid channel model types:\n");
