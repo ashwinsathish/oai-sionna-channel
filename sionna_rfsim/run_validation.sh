@@ -15,12 +15,13 @@
 #
 # No GUI: this prints text and ends with PASS or FAIL.
 set -u
+SIONNA_REPO="${SIONNA_REPO:-}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OAI_ROOT="$(cd "$HERE/.." && pwd)"
 BUILD="$OAI_ROOT/cmake_targets/ran_build/build"
-PY_REPO="/home/sathishkumara/LIT_fac_ray_tracing"
-CIR="${1:-$HERE/cir/ramp.cir}"
+DEFAULT_CIR="$HERE/cir/ramp.cir"
+CIR="${1:-$DEFAULT_CIR}"
 RUN_SECONDS=25
 
 GNB_LOG=/tmp/oai_val_gnb.log
@@ -34,10 +35,33 @@ echo " Sionna RT -> OAI channel bridge validation"
 echo " CIR file: $CIR"
 echo "=================================================================="
 
-# Make sure the bundled ramp.cir exists (generate if missing / using default).
+# The bundled ramp.cir ships with this folder. If it is missing, try to
+# regenerate it with the Python side's helper, searched in the usual places.
+if [ ! -f "$CIR" ] && [ "$CIR" != "$DEFAULT_CIR" ]; then
+  echo "ERROR: no such CIR file: $CIR"
+  echo "       Export one first, e.g.:"
+  echo "         python scripts/export_oai_cir.py --demo --out cir_out/ --fs 61.44e6"
+  exit 1
+fi
+
 if [ ! -f "$CIR" ]; then
-  echo "[setup] generating a ramp test CIR (path loss 0 -> -40 dB over 30 s)..."
-  python3 "$PY_REPO/scripts/make_test_cir.py" ramp --out "$CIR" \
+  MAKE_CIR=""
+  for cand in \
+      "$SIONNA_REPO/scripts/make_test_cir.py" \
+      "$OAI_ROOT/../sionna-for-oai/scripts/make_test_cir.py" \
+      "$HOME/sionna-for-oai/scripts/make_test_cir.py"; do
+    [ -n "${cand:-}" ] && [ -f "$cand" ] && { MAKE_CIR="$cand"; break; }
+  done
+  if [ -z "$MAKE_CIR" ]; then
+    echo "ERROR: CIR file not found: $CIR"
+    echo "       and make_test_cir.py could not be located to regenerate it."
+    echo "       Set SIONNA_REPO=/path/to/sionna-for-oai, or pass a .cir path:"
+    echo "         ./run_validation.sh /path/to/your.cir"
+    exit 1
+  fi
+  echo "[setup] generating a ramp test CIR using $MAKE_CIR ..."
+  mkdir -p "$(dirname "$CIR")"
+  python3 "$MAKE_CIR" ramp --out "$CIR" \
       --fs 61.44e6 --period 0.5 --n 60 --pl-start 0 --pl-end -40 || exit 1
 fi
 
